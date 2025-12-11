@@ -1,6 +1,7 @@
 import os
 import time
 import random 
+import glob # <--- NEW: Import glob for file listing
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -98,12 +99,11 @@ class ProtonVPN:
 
     def logout(self):
         try:
-            self.driver.get("https://account.protonvpn.com/logout") # Direct logout link is faster
+            self.driver.get("https://account.protonvpn.com/logout") 
             time.sleep(3)
             print("Logout Successful.")
             return True
         except Exception as e:
-            # If direct link fails, try clicking
             try:
                 self.driver.find_element(By.CSS_SELECTOR, ".p-1").click()
                 time.sleep(1)
@@ -115,21 +115,29 @@ class ProtonVPN:
                 print(f"Error Logout: {e}")
                 return False
 
+    def get_downloaded_filenames(self):
+        """Returns a set of filenames (without full path) currently in the download directory."""
+        return set(os.path.basename(f) for f in glob.glob(os.path.join(DOWNLOAD_DIR, '*')) if os.path.isfile(f))
+
     def process_downloads(self):
         """
-        Processes downloads for the target country with a limit per call (MAX_DOWNLOADS_PER_SESSION).
+        Processes downloads for the target country, skipping previously downloaded files.
         Returns True if all downloads for the country are finished, False otherwise.
         """
         try:
             self.driver.execute_script("window.scrollTo(0,0)")
             time.sleep(2)
 
-            # Click the configuration type tab (e.g., OpenVPN)
             try:
                 self.driver.find_element(By.CSS_SELECTOR, ".flex:nth-child(4) > .mr-8:nth-child(3) > .relative").click()
                 time.sleep(2)
             except:
                 pass
+            
+            # --- NEW: Get list of already downloaded files ---
+            downloaded_files = self.get_downloaded_filenames()
+            print(f"Found {len(downloaded_files)} configurations already downloaded.")
+            # ----------------------------------------------------
 
             countries = self.driver.find_elements(By.CSS_SELECTOR, ".mb-6 details")
             print(f"Found {len(countries)} total countries to check.")
@@ -150,11 +158,48 @@ class ProtonVPN:
                     self.driver.execute_script("arguments[0].open = true;", country)
                     time.sleep(0.5)
 
-                    buttons = country.find_elements(By.CSS_SELECTOR, "tr .button")
+                    rows = country.find_elements(By.CSS_SELECTOR, "tr")
 
-                    for index, btn in enumerate(buttons):
+                    for index, row in enumerate(rows[1:]): # Skip header row
                         
-                        # --- Check session limit (moved inside the country loop) ---
+                        # --- 1. Identify the file name before clicking the button ---
+                        # The filename is usually displayed in the second column (or similar)
+                        # We look for the button cell and the filename cell (usually the first cell in the row)
+                        
+                        try:
+                            # Assuming the server name/filename is the first column in the row
+                            file_cell = row.find_element(By.CSS_SELECTOR, "td:nth-child(1)")
+                            filename_base = file_cell.text.strip().replace(" ", "-") # Match filename format
+                            
+                            # ProtonVPN uses 'wg-SERVERNAME.conf' for WireGuard and 'SERVERNAME.udp.ovpn' for OpenVPN
+                            # Since we click the button, we need to know the *final* file name.
+                            # We assume the name is derived from the cell content plus an extension.
+                            
+                            # Find the actual download button in the row
+                            btn = row.find_element(By.CSS_SELECTOR, ".button")
+                            
+                            # Since ProtonVPN page doesn't explicitly show the full filename until download:
+                            # We rely on the name displayed in the first cell, which is the server ID (e.g., US-FREE-10)
+                            # We assume the generated filename uses this server ID (e.g., wg-US-FREE-10.conf)
+                            # To be safe, we check for both OpenVPN and WireGuard naming conventions:
+                            
+                            server_id = file_cell.text.strip()
+                            possible_filenames = [
+                                f"wg-{server_id}.conf", 
+                                f"{server_id.lower().replace('-', '')}.udp.ovpn" # Example: usfree10.udp.ovpn
+                            ]
+                            
+                            # Check if either possible filename exists in the downloaded set
+                            if any(f in downloaded_files for f in possible_filenames):
+                                print(f"Skipping config (Server ID: {server_id}). Already downloaded.")
+                                continue
+
+                        except Exception as e:
+                            print(f"Could not determine filename for row {index}. Proceeding cautiously. Error: {e}")
+                            # If we cannot parse the name, we must assume it's new and download it.
+                            pass 
+
+                        # --- 2. Check session limit ---
                         if download_counter >= MAX_DOWNLOADS_PER_SESSION:
                             print(f"Session limit reached ({MAX_DOWNLOADS_PER_SESSION}). Stopping for relogin...")
                             all_downloads_finished = False 
@@ -162,6 +207,7 @@ class ProtonVPN:
                         
                         random_delay = random.randint(60, 90)
                         
+                        # --- 3. Execute Download ---
                         try:
                             self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
                             time.sleep(0.5)
@@ -178,28 +224,30 @@ class ProtonVPN:
                             )
                             
                             download_counter += 1
-                            print(f"Successfully downloaded config {index + 1} (Total: {download_counter}). Waiting {random_delay}s...")
+                            print(f"Successfully downloaded config (Server ID: {server_id}). Total in session: {download_counter}. Waiting {random_delay}s...")
                             time.sleep(random_delay) 
 
+                            # --- NEW: Update the list of downloaded files immediately ---
+                            downloaded_files.add(f"wg-{server_id}.conf") # Add primary WireGuard name to avoid future re-downloads
+                            # We don't need to add the OpenVPN name if we skip the OpenVPN tab, 
+                            # but we add the primary name we expect.
+                            
                         except (TimeoutException, ElementClickInterceptedException) as e:
-                            print(f"CRITICAL ERROR: Failed to download config {index + 1}. Rate limit or session issue detected. Shutting down session.")
+                            print(f"CRITICAL ERROR: Failed to download config {server_id}. Rate limit or session issue detected. Shutting down session.")
                             all_downloads_finished = False
                             return all_downloads_finished
                         
                         except Exception as e:
-                            print(f"General error during download {index + 1}: {e}. Shutting down session.")
+                            print(f"General error during download {server_id}: {e}. Shutting down session.")
                             all_downloads_finished = False
                             return all_downloads_finished
                             
-                    # If we finish the buttons loop without hitting the session limit, 
-                    # it means we downloaded all available configs for this country.
+                    # Finished processing all rows for United States.
                     print(f"All available configs for {country_name} processed in this run.")
-                    # Since we only target one country, we can break the countries loop here
                     break 
 
                 except Exception as e:
                     print(f"Error processing country block: {e}")
-                    # If there's an error in the country block, assume we should try again later
                     all_downloads_finished = False 
                     return all_downloads_finished
 
@@ -208,7 +256,6 @@ class ProtonVPN:
             print(f"Error in main download loop: {e}")
             all_downloads_finished = False
             
-        # The return is outside the main try block, catching all exceptions above
         return all_downloads_finished 
 
 
@@ -219,8 +266,7 @@ class ProtonVPN:
         session_count = 0
         
         try:
-            # We assume the site will always show the same number of configs, so we stop the loop when all are processed.
-            while not all_downloads_finished and session_count < 10: # Limit to 10 sessions (200 downloads) for safety
+            while not all_downloads_finished and session_count < 10: 
                 
                 session_count += 1
                 print(f"\n###################### Starting Session {session_count} ######################")
@@ -237,12 +283,11 @@ class ProtonVPN:
                 
                 # 3. Logout
                 self.logout()
-                self.teardown() # Fully close the browser instance
+                self.teardown() 
                 
                 if all_downloads_finished:
                     print("\n###################### All configurations downloaded successfully! ######################")
                 else:
-                    # Only wait if we reached the session limit or encountered a recoverable error
                     print(f"Session {session_count} completed. Waiting {RELOGIN_DELAY} seconds before relogging in...")
                     time.sleep(RELOGIN_DELAY) 
 
