@@ -1,24 +1,20 @@
 name: ProtonVPN Config Downloader
 
-# تعیین زمان اجرای خودکار (مثلاً هر روز در ساعت 00:00 UTC)
 on:
   workflow_dispatch:
   schedule:
-    # 0 0 * * * corresponds to 12:00 AM UTC
     - cron: '0 0 * * *'
 
 jobs:
   download_and_send:
-    # از آخرین نسخه اوبونتو استفاده می شود
     runs-on: ubuntu-latest
-
-    # تعریف متغیرهای محیطی برای کل Job
+    
     env:
       VPN_USERNAME: ${{ secrets.VPN_USERNAME }}
       VPN_PASSWORD: ${{ secrets.VPN_PASSWORD }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      PYTHONUNBUFFERED: 1 # اطمینان از خروجی لاگ به صورت لحظه ای
+      PYTHONUNBUFFERED: 1
 
     steps:
     - name: ⬇️ Checkout Repository
@@ -28,41 +24,24 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
-        cache: 'pip'
+        # --- خط کش کردن که باعث خطا می شد حذف شد ---
+        # cache: 'pip' 
+        # ----------------------------------------------
 
     - name: 📦 Install Python Dependencies & Chrome Driver
       run: |
         # نصب پکیج های پایتون
-        pip install selenium requests
+        pip install selenium requests webdriver-manager
         
         # نصب مرورگر کروم و وابستگی های Headless
         sudo apt-get update
         sudo apt-get install -y google-chrome-stable
-        
-        # نصب WebDriver برای Selenium
-        # Selenium به صورت خودکار WebDriver متناسب با نسخه کروم را دانلود می کند،
-        # اما برای اطمینان و محیط های خاص، این دستورات را نگه می داریم.
-        pip install webdriver-manager
-        
-    - name: ⚙️ Clear Previous Logs/Configs (Prevent Duplicates if run manually)
+
+    - name: ⚙️ Clear Previous Logs/Configs
       run: |
         rm -rf downloaded_configs
         rm -f downloaded_server_ids.json
         mkdir -p downloaded_configs
 
     - name: 🚀 Run ProtonVPN Downloader Script
-      # اجرای اسکریپت پایتون که شامل تمام منطق دانلود،
-      # مدیریت سشن، جلوگیری از تکرار، دسته‌بندی و ارسال تلگرام است.
       run: python3 proton_downloader_chrome.py
-
-    # نکته: نیازی به مرحله شل جداگانه برای zip کردن و ارسال نیست،
-    # زیرا اسکریپت پایتون (organize_and_send_files) این کار را پس از 
-    # اتمام تمام دانلودها انجام می دهد.
-
-    # مرحله تمیزکاری نهایی در پایتون انجام شد، 
-    # اما اگر تمایل به ذخیره فایل ها در Artifacts دارید، می توانید این بخش را اضافه کنید:
-    # - name: 📦 Archive Logs (Optional)
-    #   uses: actions/upload-artifact@v4
-    #   with:
-    #     name: downloaded-logs
-    #     path: downloaded_server_ids.json
