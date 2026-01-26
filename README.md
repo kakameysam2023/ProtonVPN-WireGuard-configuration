@@ -4,6 +4,13 @@ This project provides an automated solution using Python/Selenium and GitHub Act
 
 The downloaded configurations are automatically updated in this repository and are pushed to the corresponding Telegram channel for immediate access.
 
+# 📢 Telegram Channel
+
+All final results are automatically compressed into a ZIP file and uploaded to our Telegram channel:
+
+🔹 **Main Channel:** [DeltaKroneckerFreedom](https://t.me/GitKroneckerDelta)  
+
+---
 
 ## 💻 Usage Guide (Windows Focus)
 
